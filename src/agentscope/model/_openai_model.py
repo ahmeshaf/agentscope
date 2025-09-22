@@ -89,9 +89,7 @@ class OpenAIChatModel(ChatModelBase):
         self,
         messages: list[dict],
         tools: list[dict] | None = None,
-        tool_choice: Literal["auto", "none", "any", "required"]
-        | str
-        | None = None,
+        tool_choice: Literal["auto", "none", "any", "required"] | str | None = None,
         structured_model: Type[BaseModel] | None = None,
         **kwargs: Any,
     ) -> ChatResponse | AsyncGenerator[ChatResponse, None]:
@@ -273,9 +271,7 @@ class OpenAIChatModel(ChatModelBase):
 
                 choice = chunk.choices[0]
 
-                thinking += (
-                    getattr(choice.delta, "reasoning_content", None) or ""
-                )
+                thinking += getattr(choice.delta, "reasoning_content", None) or ""
                 text += choice.delta.content or ""
 
                 for tool_call in choice.delta.tool_calls or []:
@@ -453,3 +449,65 @@ class OpenAIChatModel(ChatModelBase):
         if tool_choice in mode_mapping:
             return mode_mapping[tool_choice]
         return {"type": "function", "function": {"name": tool_choice}}
+
+
+class AzureOpenAIChatModel(OpenAIChatModel):
+    """The Azure OpenAI chat model class.
+
+    This class is a thin wrapper around `OpenAIChatModel` to use the
+    Azure OpenAI API. It is kept for backward compatibility. Please use
+    `OpenAIChatModel` instead.
+    """
+
+    def __init__(
+        self,
+        model_name: str,
+        base_url: str,
+        api_version: str,
+        api_key: str = None,
+        stream: bool = True,
+        reasoning_effort: Literal["low", "medium", "high"] | None = None,
+        client_args: dict = None,
+        generate_kwargs: dict[str, JSONSerializableObject] | None = None,
+    ) -> None:
+        """Initialize the Azure OpenAI chat model.
+
+        Args:
+            model_name (`str`, default `None`):
+                The name of the model to use in Azure OpenAI API.
+            api_key (`str`, default `None`):
+                The API key for Azure OpenAI API. If not specified, it will
+                be read from the environment variable `AZURE_OPENAI_API_KEY`.
+            stream (`bool`, default `True`):
+                Whether to use streaming output or not.
+            reasoning_effort (`Literal["low", "medium", "high"] | None`, \
+            optional):
+                Reasoning effort, supported for o3, o4, etc. Please refer to
+                `OpenAI documentation
+                <https://platform.openai.com/docs/guides/reasoning?api-mode=chat>`_
+                for more details.
+            client_args (`dict`, default `None`):
+                The extra keyword arguments to initialize the Azure OpenAI
+                client.
+            generate_kwargs (`dict[str, JSONSerializableObject] | None`, \
+             optional):
+               The extra keyword arguments used in Azure OpenAI API generation,
+                e.g. `temperature`, `seed`.
+        """
+        super(OpenAIChatModel, self).__init__(model_name, stream)
+        import openai
+
+        if not api_key:
+            import os
+
+            api_key = os.getenv("AZURE_OPENAI_API_KEY")
+
+        self.client = openai.AsyncAzureOpenAI(
+            api_key=api_key,
+            base_url=base_url,
+            api_version=api_version,
+            **(client_args or {}),
+        )
+
+        self.reasoning_effort = reasoning_effort
+        self.generate_kwargs = generate_kwargs or {}
