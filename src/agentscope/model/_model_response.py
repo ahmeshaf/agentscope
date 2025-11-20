@@ -7,7 +7,12 @@ from typing import Literal, Sequence
 from ._model_usage import ChatUsage
 from .._utils._common import _get_timestamp
 from .._utils._mixin import DictMixin
-from ..message import TextBlock, ToolUseBlock, ThinkingBlock
+from ..message import (
+    TextBlock,
+    ToolUseBlock,
+    ThinkingBlock,
+    AudioBlock,
+)
 from ..types import JSONSerializableObject
 
 
@@ -15,7 +20,7 @@ from ..types import JSONSerializableObject
 class ChatResponse(DictMixin):
     """The response of chat models."""
 
-    content: Sequence[TextBlock | ToolUseBlock | ThinkingBlock]
+    content: Sequence[TextBlock | ToolUseBlock | ThinkingBlock | AudioBlock]
     """The content of the chat response, which can include text blocks,
     tool use blocks, or thinking blocks."""
 
@@ -31,7 +36,7 @@ class ChatResponse(DictMixin):
     usage: ChatUsage | None = field(default_factory=lambda: None)
     """The usage information of the chat response, if available."""
 
-    metadata: JSONSerializableObject | None = field(
+    metadata: dict[str, JSONSerializableObject] | None = field(
         default_factory=lambda: None,
     )
     """The metadata of the chat response"""

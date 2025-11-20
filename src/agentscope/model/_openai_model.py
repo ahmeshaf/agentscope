@@ -19,7 +19,13 @@ from ._model_base import ChatModelBase
 from ._model_usage import ChatUsage
 from .._logging import logger
 from .._utils._common import _json_loads_with_repair
-from ..message import ToolUseBlock, TextBlock, ThinkingBlock
+from ..message import (
+    ToolUseBlock,
+    TextBlock,
+    ThinkingBlock,
+    AudioBlock,
+    Base64Source,
+)
 from ..tracing import trace_llm
 from ..types import JSONSerializableObject
 
@@ -29,6 +35,31 @@ if TYPE_CHECKING:
 else:
     ChatCompletion = "openai.types.chat.ChatCompletion"
     AsyncStream = "openai.types.chat.AsyncStream"
+
+
+def _format_audio_data_for_qwen_omni(messages: list[dict]) -> None:
+    """Qwen-omni uses OpenAI-compatible API but requires different audio
+    data format than OpenAI with "data:;base64," prefix.
+    Refer to `Qwen-omni documentation
+    <https://bailian.console.aliyun.com/?tab=doc#/doc/?type=model&url=2867839>`_
+    for more details.
+
+    Args:
+        messages (`list[dict]`):
+            The list of message dictionaries from OpenAI formatter.
+    """
+    for msg in messages:
+        if isinstance(msg.get("content"), list):
+            for block in msg["content"]:
+                if (
+                    isinstance(block, dict)
+                    and "input_audio" in block
+                    and isinstance(block["input_audio"].get("data"), str)
+                ):
+                    if not block["input_audio"]["data"].startswith("http"):
+                        block["input_audio"]["data"] = (
+                            "data:;base64," + block["input_audio"]["data"]
+                        )
 
 
 class OpenAIChatModel(ChatModelBase):
@@ -146,6 +177,10 @@ class OpenAIChatModel(ChatModelBase):
                 "and 'content' key for OpenAI API.",
             )
 
+        # Qwen-omni requires different base64 audio format from openai
+        if "omni" in self.model_name.lower():
+            _format_audio_data_for_qwen_omni(messages)
+
         kwargs = {
             "model": self.model_name,
             "messages": messages,
@@ -239,9 +274,12 @@ class OpenAIChatModel(ChatModelBase):
         usage, res = None, None
         text = ""
         thinking = ""
+        audio = ""
         tool_calls = OrderedDict()
-        metadata = None
-        contents: List[TextBlock | ToolUseBlock | ThinkingBlock] = []
+        metadata: dict | None = None
+        contents: List[
+            TextBlock | ToolUseBlock | ThinkingBlock | AudioBlock
+        ] = []
 
         async with response as stream:
             async for item in stream:
@@ -274,6 +312,17 @@ class OpenAIChatModel(ChatModelBase):
                 thinking += getattr(choice.delta, "reasoning_content", None) or ""
                 text += choice.delta.content or ""
 
+                if (
+                    hasattr(choice.delta, "audio")
+                    and "data" in choice.delta.audio
+                ):
+                    audio += choice.delta.audio["data"]
+                if (
+                    hasattr(choice.delta, "audio")
+                    and "transcript" in choice.delta.audio
+                ):
+                    text += choice.delta.audio["transcript"]
+
                 for tool_call in choice.delta.tool_calls or []:
                     if tool_call.index in tool_calls:
                         if tool_call.function.arguments is not None:
@@ -296,6 +345,22 @@ class OpenAIChatModel(ChatModelBase):
                         ThinkingBlock(
                             type="thinking",
                             thinking=thinking,
+                        ),
+                    )
+
+                if audio:
+                    media_type = self.generate_kwargs.get("audio", {}).get(
+                        "format",
+                        "wav",
+                    )
+                    contents.append(
+                        AudioBlock(
+                            type="audio",
+                            source=Base64Source(
+                                data=audio,
+                                media_type=f"audio/{media_type}",
+                                type="base64",
+                            ),
                         ),
                     )
 
@@ -358,8 +423,10 @@ class OpenAIChatModel(ChatModelBase):
             If `structured_model` is not `None`, the expected structured output
             will be stored in the metadata of the `ChatResponse`.
         """
-        content_blocks: List[TextBlock | ToolUseBlock | ThinkingBlock] = []
-        metadata = None
+        content_blocks: List[
+            TextBlock | ToolUseBlock | ThinkingBlock | AudioBlock
+        ] = []
+        metadata: dict | None = None
 
         if response.choices:
             choice = response.choices[0]
@@ -381,6 +448,29 @@ class OpenAIChatModel(ChatModelBase):
                         text=response.choices[0].message.content,
                     ),
                 )
+            if choice.message.audio:
+                media_type = self.generate_kwargs.get("audio", {}).get(
+                    "format",
+                    "mp3",
+                )
+                content_blocks.append(
+                    AudioBlock(
+                        type="audio",
+                        source=Base64Source(
+                            data=choice.message.audio.data,
+                            media_type=f"audio/{media_type}",
+                            type="base64",
+                        ),
+                    ),
+                )
+
+                if choice.message.audio.transcript:
+                    content_blocks.append(
+                        TextBlock(
+                            type="text",
+                            text=choice.message.audio.transcript,
+                        ),
+                    )
 
             for tool_call in choice.message.tool_calls or []:
                 content_blocks.append(
